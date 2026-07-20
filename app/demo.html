@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Atlas — Demostración Semana 8</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: #0f172a; color: #e2e8f0;
+    font-family: "Segoe UI", Roboto, system-ui, sans-serif;
+    padding: 24px; line-height: 1.5;
+  }
+  .wrap { max-width: 1000px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  .sub { color: #94a3b8; margin: 0 0 20px; }
+  .loginbar {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    background: #1e293b; padding: 16px; border-radius: 12px; margin-bottom: 24px;
+  }
+  #loginStatus { font-weight: 600; }
+  .ok { color: #4ade80; }
+  .warn { color: #fbbf24; }
+  section {
+    background: #1e293b; border-radius: 12px; padding: 20px; margin-bottom: 20px;
+    border: 1px solid #334155;
+  }
+  section h2 { margin: 0 0 6px; font-size: 19px; }
+  section .desc { color: #94a3b8; margin: 0 0 16px; font-size: 15px; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+  button {
+    font-size: 16px; font-weight: 600; padding: 12px 18px; border: none;
+    border-radius: 10px; cursor: pointer; color: #fff; background: #3b82f6;
+    transition: filter .15s;
+  }
+  button:hover { filter: brightness(1.1); }
+  button.lento { background: #ef4444; }
+  button.rapido { background: #22c55e; }
+  button.neutro { background: #6366f1; }
+  .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 640px) { .compare { grid-template-columns: 1fr; } }
+  .box {
+    border-radius: 10px; padding: 16px; min-height: 96px; background: #0f172a;
+    border: 1px solid #334155;
+  }
+  .box .etq { font-size: 13px; text-transform: uppercase; letter-spacing: .5px; color: #94a3b8; margin-bottom: 6px; }
+  .box .big { font-size: 34px; font-weight: 800; line-height: 1.1; }
+  .box .small { font-size: 14px; color: #cbd5e1; margin-top: 6px; }
+  .box.rojo { border-color: #ef4444; }
+  .box.rojo .big { color: #f87171; }
+  .box.verde { border-color: #22c55e; }
+  .box.verde .big { color: #4ade80; }
+  .single { max-width: 420px; }
+  code { background: #0f172a; padding: 2px 6px; border-radius: 6px; color: #93c5fd; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Atlas — Demostración de optimización</h1>
+  <p class="sub">Taller Semana 8 · Backend FastAPI + SQLAlchemy + Redis</p>
+
+  <div class="loginbar">
+    <button onclick="login()">Paso 1 — Iniciar sesión</button>
+    <span id="loginStatus" class="warn">No has iniciado sesión</span>
+  </div>
+
+  <!-- 1. AUTENTICACION -->
+  <section>
+    <h2>1. Autenticación (sin consultas redundantes)</h2>
+    <p class="desc">El usuario se identifica con un token. La forma optimizada lee la identidad del token
+      sin ir a la base de datos; la forma lenta consulta la base en cada pedido.</p>
+    <div class="row">
+      <button class="lento" onclick="auth('/auth/me-db','a_auth')">Forma lenta (consulta la base)</button>
+      <button class="rapido" onclick="auth('/auth/me','d_auth')">Forma optimizada (usa el token)</button>
+    </div>
+    <div class="compare">
+      <div class="box rojo" id="a_auth"><div class="etq">Forma lenta</div><div class="big">—</div><div class="small">Aprieta el botón rojo</div></div>
+      <div class="box verde" id="d_auth"><div class="etq">Forma optimizada</div><div class="big">—</div><div class="small">Aprieta el botón verde</div></div>
+    </div>
+  </section>
+
+  <!-- 2. N+1 -->
+  <section>
+    <h2>2. Consulta N+1 (listar ideas)</h2>
+    <p class="desc">Sin optimizar, la base recibe una consulta extra por cada idea. Con eager loading
+      se resuelve en pocas consultas fijas, sin importar cuántas ideas haya.</p>
+    <div class="row">
+      <button class="lento" onclick="ideas(false,'a_n1')">Listar SIN optimizar</button>
+      <button class="rapido" onclick="ideas(true,'d_n1')">Listar OPTIMIZADO</button>
+    </div>
+    <div class="compare">
+      <div class="box rojo" id="a_n1"><div class="etq">Sin optimizar</div><div class="big">—</div><div class="small">Aprieta el botón rojo</div></div>
+      <div class="box verde" id="d_n1"><div class="etq">Optimizado</div><div class="big">—</div><div class="small">Aprieta el botón verde</div></div>
+    </div>
+  </section>
+
+  <!-- 3. CACHE -->
+  <section>
+    <h2>3. Caché del dashboard</h2>
+    <p class="desc">Aprieta "Pedir reporte" <b>dos veces</b>: la 1.ª vez lo CALCULA (lento), la 2.ª vez viene
+      DEL CACHÉ (rápido). El botón naranja borra el caché para que se recalcule.</p>
+    <div class="row">
+      <button class="neutro" onclick="dash()">Pedir reporte del dashboard</button>
+      <button style="background:#f59e0b" onclick="invalidar()">Registrar métrica (borra el caché)</button>
+    </div>
+    <div class="box single" id="r_dash"><div class="etq">Resultado</div><div class="big">—</div><div class="small">Aprieta "Pedir reporte"</div></div>
+  </section>
+
+  <!-- 4. ASINCRONO -->
+  <section>
+    <h2>4. Cola de trabajo (generar publicación con IA)</h2>
+    <p class="desc">La forma en segundo plano responde al instante y un worker hace el trabajo pesado aparte.
+      La forma bloqueante deja esperando el pedido varios segundos.</p>
+    <div class="row">
+      <button class="rapido" onclick="publicarAsync()">Generar EN SEGUNDO PLANO (rápido)</button>
+      <button class="lento" onclick="publicarSync()">Generar BLOQUEANDO (lento)</button>
+    </div>
+    <div class="compare">
+      <div class="box verde" id="d_async"><div class="etq">En segundo plano</div><div class="big">—</div><div class="small">Aprieta el botón verde</div></div>
+      <div class="box rojo" id="a_sync"><div class="etq">Bloqueando</div><div class="big">—</div><div class="small">Aprieta el botón rojo</div></div>
+    </div>
+  </section>
+</div>
+
+<script>
+  let token = null;
+
+  function setBox(id, big, small, etq) {
+    const b = document.getElementById(id);
+    b.querySelector('.big').textContent = big;
+    b.querySelector('.small').textContent = small;
+    if (etq) b.querySelector('.etq').textContent = etq;
+  }
+
+  function pedirLogin() {
+    document.getElementById('loginStatus').textContent = 'Primero aprieta "Paso 1 — Iniciar sesión"';
+    document.getElementById('loginStatus').className = 'warn';
+  }
+
+  async function api(path, opts) {
+    opts = opts || {};
+    opts.headers = Object.assign({}, opts.headers || {}, token ? { Authorization: 'Bearer ' + token } : {});
+    const res = await fetch(path, opts);
+    let data = null;
+    try { data = await res.json(); } catch (e) {}
+    return { res, data };
+  }
+
+  async function login() {
+    try {
+      const { res, data } = await api('/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'demo@atlas.app', password: 'atlas123' })
+      });
+      if (res.ok) {
+        token = data.access_token;
+        const s = document.getElementById('loginStatus');
+        s.textContent = 'Sesión iniciada como demo@atlas.app. Ya puedes usar los botones de abajo.';
+        s.className = 'ok';
+      } else {
+        document.getElementById('loginStatus').textContent = 'No se pudo iniciar sesión. ¿Corriste el seed?';
+      }
+    } catch (e) {
+      document.getElementById('loginStatus').textContent = 'No hay conexión con el backend. Levántalo con: docker compose up -d';
+    }
+  }
+
+  async function auth(path, boxId) {
+    if (!token) return pedirLogin();
+    const { res } = await api(path, {});
+    const q = res.headers.get('x-query-count');
+    const modo = res.headers.get('x-auth-mode');
+    setBox(boxId, q + (q === '1' ? ' consulta' : ' consultas'), 'Modo: ' + modo);
+  }
+
+  async function ideas(optimized, boxId) {
+    if (!token) return pedirLogin();
+    const { res } = await api('/ideas?optimized=' + optimized, {});
+    const q = res.headers.get('x-query-count');
+    const t = res.headers.get('x-process-time-ms');
+    setBox(boxId, q + ' consultas', t + ' ms');
+  }
+
+  async function dash() {
+    if (!token) return pedirLogin();
+    const { res } = await api('/dashboard/metricas', {});
+    const cache = res.headers.get('x-cache');
+    const t = res.headers.get('x-process-time-ms');
+    const esHit = cache === 'HIT';
+    const b = document.getElementById('r_dash');
+    b.className = 'box single ' + (esHit ? 'verde' : 'rojo');
+    setBox('r_dash', esHit ? 'DESDE CACHÉ' : 'CALCULADO', t + ' ms  ·  ' + (esHit ? '0 consultas' : 'consultó la base'),
+      esHit ? 'Rápido' : 'Lento');
+  }
+
+  async function invalidar() {
+    if (!token) return pedirLogin();
+    await api('/publicaciones/1/metricas', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fuente: 'manual', likes: 40, comentarios: 4, compartidos: 2, alcance: 700 })
+    });
+    setBox('r_dash', 'CACHÉ BORRADO', 'El próximo "Pedir reporte" volverá a CALCULAR', 'Invalidado');
+    document.getElementById('r_dash').className = 'box single';
+  }
+
+  async function publicarAsync() {
+    if (!token) return pedirLogin();
+    setBox('d_async', '...', 'Encolando el trabajo');
+    const t0 = performance.now();
+    const { res, data } = await api('/ideas/4/publicar', { method: 'POST' });
+    const dt = Math.round(performance.now() - t0);
+    if (!res.ok || !data) { setBox('d_async', 'Error', 'Revisa que iniciaste sesión'); return; }
+    setBox('d_async', 'RESPONDIÓ EN ' + dt + ' ms', 'Estado: ' + data.estado + ' — el worker está trabajando...');
+    // Consultar el avance del trabajo cada segundo
+    let intentos = 0;
+    const jobId = data.job_id;
+    const timer = setInterval(async () => {
+      intentos++;
+      const r = await api('/jobs/' + jobId, {});
+      const estado = r.data ? r.data.estado : '?';
+      setBox('d_async', 'RESPONDIÓ EN ' + dt + ' ms', 'Trabajo en segundo plano: ' + estado);
+      if (estado === 'done' || estado === 'error' || intentos > 12) {
+        clearInterval(timer);
+        if (estado === 'done') setBox('d_async', 'LISTO EN SEGUNDO PLANO', 'La app respondió en ' + dt + ' ms y el worker terminó la publicación.');
+      }
+    }, 1000);
+  }
+
+  async function publicarSync() {
+    if (!token) return pedirLogin();
+    setBox('a_sync', 'Esperando...', 'El pedido está BLOQUEADO hasta que termine la IA');
+    const t0 = performance.now();
+    const { res } = await api('/ideas/5/publicar?sync=true', { method: 'POST' });
+    const dt = Math.round(performance.now() - t0);
+    setBox('a_sync', 'BLOQUEÓ ' + dt + ' ms', 'El usuario tuvo que esperar todo ese tiempo.');
+  }
+</script>
+</body>
+</html>

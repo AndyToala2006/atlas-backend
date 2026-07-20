@@ -1,0 +1,165 @@
+{
+  "info": {
+    "name": "Atlas Backend - Semana 8 (Optimizacion)",
+    "description": "Pruebas del backend de Atlas. El login guarda el token automaticamente; el 'Publicar asincrono' guarda el job_id. Orden sugerido para el video: Login -> Ideas ingenuo/optimizado -> Auth me/me-db -> Dashboard x2 -> Publicar -> Job -> Metrica -> Dashboard.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8000" },
+    { "key": "token", "value": "" },
+    { "key": "job_id", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "0. Salud",
+      "request": { "method": "GET", "url": "{{baseUrl}}/health" }
+    },
+    {
+      "name": "1. Auth - Registrar (opcional)",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"email\": \"nuevo@atlas.app\",\n  \"nombre\": \"Usuario Nuevo\",\n  \"password\": \"atlas123\",\n  \"tono\": \"profesional\"\n}" },
+        "url": "{{baseUrl}}/auth/register"
+      }
+    },
+    {
+      "name": "2. Auth - Login (guarda token)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "var data = pm.response.json();",
+              "pm.collectionVariables.set('token', data.access_token);",
+              "pm.test('token recibido', function () { pm.expect(data.access_token).to.be.a('string'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"email\": \"demo@atlas.app\",\n  \"password\": \"atlas123\"\n}" },
+        "url": "{{baseUrl}}/auth/login"
+      }
+    },
+    {
+      "name": "3. Auth - Me (JWT, 0 consultas)",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": "{{baseUrl}}/auth/me"
+      }
+    },
+    {
+      "name": "4. Auth - Me-DB (ingenuo, 1 consulta)",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": "{{baseUrl}}/auth/me-db"
+      }
+    },
+    {
+      "name": "5. Ideas - Listar INGENUO (N+1)",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": {
+          "raw": "{{baseUrl}}/ideas?optimized=false",
+          "host": ["{{baseUrl}}"],
+          "path": ["ideas"],
+          "query": [{ "key": "optimized", "value": "false" }]
+        }
+      }
+    },
+    {
+      "name": "6. Ideas - Listar OPTIMIZADO (eager)",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": {
+          "raw": "{{baseUrl}}/ideas?optimized=true",
+          "host": ["{{baseUrl}}"],
+          "path": ["ideas"],
+          "query": [{ "key": "optimized", "value": "true" }]
+        }
+      }
+    },
+    {
+      "name": "7. Ideas - Crear",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "body": { "mode": "raw", "raw": "{\n  \"titulo\": \"Idea creada en el demo\",\n  \"contenido\": \"Probar el flujo completo del backend optimizado\",\n  \"origen\": \"texto\",\n  \"etiquetas\": [\"ia\", \"productividad\"]\n}" },
+        "url": "{{baseUrl}}/ideas"
+      }
+    },
+    {
+      "name": "8. Dashboard - Metricas (cache-aside)",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": "{{baseUrl}}/dashboard/metricas"
+      }
+    },
+    {
+      "name": "9. Publicar ASINCRONO (guarda job_id)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "var data = pm.response.json();",
+              "pm.collectionVariables.set('job_id', data.job_id);",
+              "pm.test('encolado', function () { pm.expect(data.modo).to.eql('asincrono'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": "{{baseUrl}}/ideas/4/publicar"
+      }
+    },
+    {
+      "name": "10. Job - Estado",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": "{{baseUrl}}/jobs/{{job_id}}"
+      }
+    },
+    {
+      "name": "11. Publicar SINCRONO (bloquea ~3s)",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": {
+          "raw": "{{baseUrl}}/ideas/5/publicar?sync=true",
+          "host": ["{{baseUrl}}"],
+          "path": ["ideas", "5", "publicar"],
+          "query": [{ "key": "sync", "value": "true" }]
+        }
+      }
+    },
+    {
+      "name": "12. Metrica - Registrar (invalida cache)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "body": { "mode": "raw", "raw": "{\n  \"fuente\": \"manual\",\n  \"likes\": 80,\n  \"comentarios\": 6,\n  \"compartidos\": 3,\n  \"alcance\": 1200\n}" },
+        "url": "{{baseUrl}}/publicaciones/1/metricas"
+      }
+    }
+  ]
+}
