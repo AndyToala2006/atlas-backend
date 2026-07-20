@@ -67,13 +67,18 @@ Ejecuta **GET /ideas** con el campo **optimized** en **false** → "Execute".
 > "Sin optimizar, la base recibe una consulta extra por cada idea. Con mis 50 ideas,
 > son más de cien consultas."
 
-Mira: **x-query-count: 101** (y el tiempo).
+OJO: esto **tarda unos 10-11 segundos** en responder (porque cada consulta viaja
+por internet a Supabase). Esa espera ES el problema; aprovecha para narrar:
+> "Fíjense que sigue cargando... está haciendo más de cien viajes a la base de datos.
+> Así de caro sale el N+1."
 
-Ahora cambia **optimized** a **true** → "Execute".
-> "Optimizado, con eager loading, bajo a solo 3 consultas, sin importar cuántas ideas
-> tenga. De 101 a 3."
+Mira: **x-query-count: 101** y **x-process-time-ms ≈ 11000**.
 
-Mira: **x-query-count: 3** (y el tiempo, mucho menor).
+Ahora cambia **optimized** a **true** → "Execute". Responde en menos de un segundo.
+> "Optimizado, con eager loading, bajo a solo 3 consultas. De once segundos a menos
+> de uno, sin importar cuántas ideas tenga."
+
+Mira: **x-query-count: 3** y **x-process-time-ms** mucho menor (menos de 1000).
 
 ### Parte 4 — Caché del dashboard
 > "El reporte del dashboard suma datos de muchas tablas. Le puse caché."
@@ -136,12 +141,14 @@ Si quieres, abre VS Code un momento y nombra un archivo por técnica:
 
 ---
 
-## Números que vas a ver (para no confundirte)
+## Números que vas a ver (medidos contra tu Supabase real)
 - Autenticación: **0** (optimizada) contra **1** consulta (antigua).
-- Ideas: **101** consultas (sin optimizar) contra **3** (optimizado).
-- Dashboard: **MISS** con 4 consultas (calcula) contra **HIT** con 0 consultas (caché).
+- Ideas: **101** consultas · **~11 segundos** (sin optimizar) contra **3** consultas · **menos de 1 s** (optimizado).
+- Dashboard: **MISS** (4 consultas, ~800 ms) contra **HIT** (0 consultas, ~3 ms).
 - Publicar: en segundo plano responde **al instante**; bloqueando tarda **~3000 ms**.
-> Los milisegundos pueden variar; los conteos de consultas son fijos.
+> Los milisegundos pueden variar entre grabaciones; los conteos de consultas
+> (101, 3, 1, 0) son fijos. La base de datos es tu Supabase real: la lentitud del
+> N+1 y el ahorro del caché no están simulados.
 
 ## Antes de subir a Moodle
 - [ ] El video quedó con permisos para que cualquiera con el enlace lo vea.
