@@ -1,0 +1,90 @@
+### Pruebas del backend de Atlas (extension "REST Client" de VS Code)
+### Ejecuta las peticiones en orden con "Send Request". Mira las cabeceras de
+### respuesta: X-Query-Count, X-Cache y X-Process-Time-ms cuentan la historia.
+
+@baseUrl = http://localhost:8000
+
+### 0. Salud
+GET {{baseUrl}}/health
+
+### 1. Login (guarda el token en la variable)
+# @name login
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "demo@atlas.app",
+  "password": "atlas123"
+}
+
+###
+@token = {{login.response.body.access_token}}
+
+### 2. AUTH optimizado: identidad desde el JWT -> X-Query-Count: 0
+GET {{baseUrl}}/auth/me
+Authorization: Bearer {{token}}
+
+### 3. AUTH ingenuo: consulta la base -> X-Query-Count: 1
+GET {{baseUrl}}/auth/me-db
+Authorization: Bearer {{token}}
+
+### 4. N+1 INGENUO: X-Query-Count sube con el numero de ideas (1 + 2N)
+GET {{baseUrl}}/ideas?optimized=false
+Authorization: Bearer {{token}}
+
+### 5. N+1 CORREGIDO (eager loading): X-Query-Count constante = 3
+GET {{baseUrl}}/ideas?optimized=true
+Authorization: Bearer {{token}}
+
+### 6. CACHE: 1er request -> X-Cache: MISS (lento, consulta la base)
+GET {{baseUrl}}/dashboard/metricas
+Authorization: Bearer {{token}}
+
+### 7. CACHE: 2do request -> X-Cache: HIT (rapido, 0 consultas)
+GET {{baseUrl}}/dashboard/metricas
+Authorization: Bearer {{token}}
+
+### 8. ASINCRONO: encola la generacion con IA y responde al instante
+# @name publicar
+POST {{baseUrl}}/ideas/4/publicar
+Authorization: Bearer {{token}}
+
+###
+@jobId = {{publicar.response.body.job_id}}
+
+### 9. Estado del job (repetir: queued -> processing -> done)
+GET {{baseUrl}}/jobs/{{jobId}}
+Authorization: Bearer {{token}}
+
+### 10. SINCRONO (comparacion): bloquea ~3s hasta terminar la IA
+POST {{baseUrl}}/ideas/5/publicar?sync=true
+Authorization: Bearer {{token}}
+
+### 11. Registrar metrica -> invalida el cache del dashboard
+POST {{baseUrl}}/publicaciones/1/metricas
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "fuente": "manual",
+  "likes": 80,
+  "comentarios": 6,
+  "compartidos": 3,
+  "alcance": 1200
+}
+
+### 12. Dashboard de nuevo -> X-Cache: MISS (se recalculo tras invalidar)
+GET {{baseUrl}}/dashboard/metricas
+Authorization: Bearer {{token}}
+
+### 13. Crear una idea nueva
+POST {{baseUrl}}/ideas
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "titulo": "Idea creada en el demo",
+  "contenido": "Probar el flujo completo del backend optimizado",
+  "origen": "texto",
+  "etiquetas": ["ia", "productividad"]
+}

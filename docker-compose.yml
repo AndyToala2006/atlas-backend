@@ -1,0 +1,76 @@
+# Infraestructura completa del backend de Atlas.
+#   db     -> Postgres (base de datos del proyecto, Semana 4)
+#   redis  -> caché-aside + broker de la cola de trabajo
+#   api    -> FastAPI (uvicorn con recarga en caliente)
+#   worker -> Celery (procesa la generación de publicaciones con IA)
+#
+# Levantar todo:            docker compose up -d --build
+# Cargar datos de prueba:   docker compose exec api python seed.py
+# Ver logs del worker:      docker compose logs -f worker
+services:
+  db:
+    image: postgres:16
+    container_name: atlas_db
+    environment:
+      POSTGRES_USER: atlas
+      POSTGRES_PASSWORD: atlas
+      POSTGRES_DB: atlas
+    ports:
+      - "5432:5432"
+    volumes:
+      - atlas_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U atlas"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    container_name: atlas_redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    container_name: atlas_api
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    environment:
+      # Por defecto usa el Postgres local (servicio db). Si en el archivo .env
+      # defines DATABASE_URL (tu Supabase) y DB_SCHEMA, esos valores mandan.
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://atlas:atlas@db:5432/atlas}
+      DB_SCHEMA: ${DB_SCHEMA:-}
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - .:/code
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: .
+    container_name: atlas_worker
+    command: celery -A app.tasks.celery_app.celery_app worker --loglevel=info
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://atlas:atlas@db:5432/atlas}
+      DB_SCHEMA: ${DB_SCHEMA:-}
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - .:/code
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  atlas_pg:
