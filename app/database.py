@@ -10,16 +10,22 @@ from sqlalchemy.orm import declarative_base, sessionmaker, Session as SASession
 
 from .config import settings
 
-# Si se define un esquema (caso Supabase real), la conexión trabaja dentro de él.
-_connect_args = {}
-if settings.db_schema:
-    _connect_args["options"] = f"-csearch_path={settings.db_schema}"
-
-engine = create_engine(
-    settings.database_url, pool_pre_ping=True, future=True, connect_args=_connect_args
-)
+engine = create_engine(settings.database_url, pool_pre_ping=True, future=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 Base = declarative_base()
+
+
+# Si se apunta a Supabase (esquema aparte), fijamos el search_path en CADA conexión
+# con un SET explícito. Es robusto incluso a través del pooler de Supabase, y así
+# nuestras tablas se crean y consultan solo dentro de ese esquema, sin tocar las
+# tablas de la Semana 4 que viven en "public".
+if settings.db_schema:
+
+    @event.listens_for(engine, "connect")
+    def _set_search_path(dbapi_conn, conn_record):
+        cur = dbapi_conn.cursor()
+        cur.execute(f'SET search_path TO "{settings.db_schema}"')
+        cur.close()
 
 
 def ensure_schema() -> None:
