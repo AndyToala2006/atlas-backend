@@ -1,13 +1,21 @@
-### Pruebas del backend de Atlas (extension "REST Client" de VS Code)
-### Ejecuta las peticiones en orden con "Send Request". Mira las cabeceras de
-### respuesta: X-Query-Count, X-Cache y X-Process-Time-ms cuentan la historia.
+### Pruebas manuales del backend de Atlas (extension "REST Client" de VS Code)
+### Recorrido completo de la Semana 13: CRUD de ideas de punta a punta mas los
+### casos negativos que demuestran que la autorizacion por objeto esta cerrada.
+###
+### Ejecuta las peticiones EN ORDEN con "Send Request": ninguna lleva ids fijos,
+### todas encadenan el id de la respuesta anterior con "# @name", igual que ya se
+### hacia con el token del login. Asi la coleccion se puede correr las veces que
+### haga falta sin editar numeros a mano.
+###
+### Mira siempre las cabeceras de respuesta: X-Query-Count (N+1), X-Cache
+### (cache-aside) y X-Process-Time-ms (asincrono vs sincrono) cuentan la historia.
 
 @baseUrl = http://localhost:8000
 
-### 0. Salud
+### 0. Salud del servicio -> 200 {"status":"ok"}
 GET {{baseUrl}}/health
 
-### 1. Login (guarda el token en la variable)
+### 1. Login del usuario demo -> 200 con el JWT (se guarda en la variable)
 # @name login
 POST {{baseUrl}}/auth/login
 Content-Type: application/json
@@ -20,48 +28,90 @@ Content-Type: application/json
 ###
 @token = {{login.response.body.access_token}}
 
-### 2. AUTH optimizado: identidad desde el JWT -> X-Query-Count: 0
+### 2. AUTH optimizado: identidad desde el JWT -> 200 y X-Query-Count: 0
 GET {{baseUrl}}/auth/me
 Authorization: Bearer {{token}}
 
-### 3. AUTH ingenuo: consulta la base -> X-Query-Count: 1
+### 3. AUTH ingenuo: consulta la base -> 200 y X-Query-Count: 1
 GET {{baseUrl}}/auth/me-db
 Authorization: Bearer {{token}}
 
-### 4. N+1 INGENUO: X-Query-Count sube con el numero de ideas (1 + 2N)
+### 4. CREAR idea -> 201 IdeaDetalleOut (unico sitio donde nace el id que sigue)
+# @name crearIdea
+POST {{baseUrl}}/ideas
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "titulo": "Idea creada desde las pruebas manuales",
+  "contenido": "Recorrido completo del CRUD: crear, leer, editar y borrar.",
+  "origen": "texto",
+  "etiquetas": ["ia", "productividad"]
+}
+
+###
+@ideaId = {{crearIdea.response.body.id}}
+
+### 5. DETALLE de esa idea -> 200 y, a diferencia del listado, SI trae "contenido"
+GET {{baseUrl}}/ideas/{{ideaId}}
+Authorization: Bearer {{token}}
+
+### 6. EDITAR (PATCH parcial: solo viajan las claves enviadas) -> 200 IdeaDetalleOut
+PATCH {{baseUrl}}/ideas/{{ideaId}}
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "titulo": "Idea editada desde las pruebas manuales",
+  "etiquetas": ["ia", "crud"]
+}
+
+### 7. N+1 INGENUO -> 200 y X-Query-Count sube con el numero de ideas (1 + 2N)
 GET {{baseUrl}}/ideas?optimized=false
 Authorization: Bearer {{token}}
 
-### 5. N+1 CORREGIDO (eager loading): X-Query-Count constante = 3
+### 8. N+1 CORREGIDO (eager loading) -> 200 y X-Query-Count constante = 3
 GET {{baseUrl}}/ideas?optimized=true
 Authorization: Bearer {{token}}
 
-### 6. CACHE: 1er request -> X-Cache: MISS (lento, consulta la base)
+### 9. CACHE MISS garantizado -> 200 y X-Cache: MISS (el PATCH anterior invalido la clave)
 GET {{baseUrl}}/dashboard/metricas
 Authorization: Bearer {{token}}
 
-### 7. CACHE: 2do request -> X-Cache: HIT (rapido, 0 consultas)
+### 10. CACHE HIT -> 200, X-Cache: HIT, X-Query-Count: 0 y X-Process-Time-ms minimo
 GET {{baseUrl}}/dashboard/metricas
 Authorization: Bearer {{token}}
 
-### 8. ASINCRONO: encola la generacion con IA y responde al instante
+### 11. ASINCRONO: encola la generacion con IA -> 202 y responde al instante
 # @name publicar
-POST {{baseUrl}}/ideas/4/publicar
+POST {{baseUrl}}/ideas/{{ideaId}}/publicar
 Authorization: Bearer {{token}}
 
 ###
 @jobId = {{publicar.response.body.job_id}}
 
-### 9. Estado del job (repetir: queued -> processing -> done)
+### 12. Estado del job encolado -> 200 (repetir: queued -> processing -> done)
 GET {{baseUrl}}/jobs/{{jobId}}
 Authorization: Bearer {{token}}
 
-### 10. SINCRONO (comparacion): bloquea ~3s hasta terminar la IA
-POST {{baseUrl}}/ideas/5/publicar?sync=true
+### 13. SINCRONO (comparacion): bloquea ~3s -> 200 y el job ya viene terminado
+# @name publicarSincrono
+POST {{baseUrl}}/ideas/{{ideaId}}/publicar?sync=true
 Authorization: Bearer {{token}}
 
-### 11. Registrar metrica -> invalida el cache del dashboard
-POST {{baseUrl}}/publicaciones/1/metricas
+###
+@jobSincronoId = {{publicarSincrono.response.body.job_id}}
+
+### 14. Job del modo sincrono -> 200 estado "done" y el id de la publicacion creada
+# @name jobSincrono
+GET {{baseUrl}}/jobs/{{jobSincronoId}}
+Authorization: Bearer {{token}}
+
+###
+@publicacionId = {{jobSincrono.response.body.resultado_publicacion_id}}
+
+### 15. Registrar metrica sobre esa publicacion -> 201 {"ok":true,"cache":"invalidado"}
+POST {{baseUrl}}/publicaciones/{{publicacionId}}/metricas
 Authorization: Bearer {{token}}
 Content-Type: application/json
 
@@ -73,18 +123,127 @@ Content-Type: application/json
   "alcance": 1200
 }
 
-### 12. Dashboard de nuevo -> X-Cache: MISS (se recalculo tras invalidar)
+### 16. Dashboard tras la escritura -> 200 y X-Cache: MISS (se recalculo tras invalidar)
 GET {{baseUrl}}/dashboard/metricas
 Authorization: Bearer {{token}}
 
-### 13. Crear una idea nueva
+### 17. BORRAR la idea -> 204 sin cuerpo (arrastra publicaciones, metricas y jobs)
+DELETE {{baseUrl}}/ideas/{{ideaId}}
+Authorization: Bearer {{token}}
+
+### 18. La idea borrada ya no existe -> 404 {"detail":"Idea no encontrada"}
+GET {{baseUrl}}/ideas/{{ideaId}}
+Authorization: Bearer {{token}}
+
+
+###############################################################################
+### CASOS NEGATIVOS
+### Lo que NO debe poder hacerse. El bloque de acceso cruzado (pasos 26 a 30) es
+### la evidencia de que los fallos de autorizacion por objeto quedaron cerrados: se
+### responde 404 y no 403 para no revelar que el recurso ajeno existe.
+###############################################################################
+
+### 19. Sin cabecera Authorization -> 403 "Not authenticated" (lo corta HTTPBearer
+### antes de llegar a la ruta; con auto_error desactivado seria 401)
+GET {{baseUrl}}/ideas
+
+### 20. Token manipulado (firma invalida) -> 401 "Token invalido o expirado"
+GET {{baseUrl}}/ideas
+Authorization: Bearer {{token}}manipulado
+
+### 21. Idea "cebo" recien creada -> 201. La idea del recorrido feliz ya se borro
+### en el paso 17, asi que el acceso cruzado necesita un recurso VIVO: si no
+### existiera, el 404 no probaria nada.
+# @name crearIdeaCebo
 POST {{baseUrl}}/ideas
 Authorization: Bearer {{token}}
 Content-Type: application/json
 
 {
-  "titulo": "Idea creada en el demo",
-  "contenido": "Probar el flujo completo del backend optimizado",
+  "titulo": "Idea cebo para los casos negativos",
+  "contenido": "Queda viva a proposito: sobre ella se prueba el acceso cruzado.",
   "origen": "texto",
-  "etiquetas": ["ia", "productividad"]
+  "etiquetas": ["seguridad"]
 }
+
+###
+@ideaCeboId = {{crearIdeaCebo.response.body.id}}
+
+### 22. PATCH con cuerpo vacio -> 400 (detalle: no se envio ningun campo que actualizar)
+PATCH {{baseUrl}}/ideas/{{ideaCeboId}}
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{}
+
+### 23. El dueno publica la idea cebo en modo sincrono -> 200 (crea publicacion y job)
+# @name publicarCebo
+POST {{baseUrl}}/ideas/{{ideaCeboId}}/publicar?sync=true
+Authorization: Bearer {{token}}
+
+###
+@jobCeboId = {{publicarCebo.response.body.job_id}}
+
+### 24. Job del cebo -> 200 estado "done" y el id de su publicacion
+# @name jobCebo
+GET {{baseUrl}}/jobs/{{jobCeboId}}
+Authorization: Bearer {{token}}
+
+###
+@publicacionCeboId = {{jobCebo.response.body.resultado_publicacion_id}}
+
+### 25. Segundo usuario (el "intruso") -> 201 y su propio token valido.
+### El email lleva la marca de tiempo para poder repetir la prueba sin chocar
+### con el 409 de email duplicado.
+# @name intruso
+POST {{baseUrl}}/auth/register
+Content-Type: application/json
+
+{
+  "email": "intruso-{{$timestamp}}@atlas.app",
+  "nombre": "Usuario Intruso",
+  "password": "atlas123",
+  "tono": "profesional"
+}
+
+###
+@tokenIntruso = {{intruso.response.body.access_token}}
+
+### 26. ACCESO CRUZADO - leer la idea ajena -> 404 (existe, pero no es suya)
+GET {{baseUrl}}/ideas/{{ideaCeboId}}
+Authorization: Bearer {{tokenIntruso}}
+
+### 27. ACCESO CRUZADO - editar la idea ajena -> 404 (el WHERE filtra por dueno)
+PATCH {{baseUrl}}/ideas/{{ideaCeboId}}
+Authorization: Bearer {{tokenIntruso}}
+Content-Type: application/json
+
+{
+  "titulo": "Secuestrada"
+}
+
+### 28. ACCESO CRUZADO - borrar la idea ajena -> 404 (no se borra ninguna fila)
+DELETE {{baseUrl}}/ideas/{{ideaCeboId}}
+Authorization: Bearer {{tokenIntruso}}
+
+### 29. ACCESO CRUZADO - consultar el job ajeno sabiendo su uuid -> 404 (IDOR cerrado)
+GET {{baseUrl}}/jobs/{{jobCeboId}}
+Authorization: Bearer {{tokenIntruso}}
+
+### 30. ACCESO CRUZADO - escribir metricas en la publicacion ajena -> 404 (IDOR cerrado)
+POST {{baseUrl}}/publicaciones/{{publicacionCeboId}}/metricas
+Authorization: Bearer {{tokenIntruso}}
+Content-Type: application/json
+
+{
+  "fuente": "manual",
+  "likes": 9999,
+  "comentarios": 0,
+  "compartidos": 0,
+  "alcance": 0
+}
+
+### 31. CONTRASTE: el dueno SI borra su idea cebo -> 204. Mismo request que el
+### paso 28, distinto token: la diferencia esta en quien la pide, no en el id.
+DELETE {{baseUrl}}/ideas/{{ideaCeboId}}
+Authorization: Bearer {{token}}

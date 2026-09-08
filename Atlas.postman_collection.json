@@ -1,21 +1,57 @@
 {
   "info": {
-    "name": "Atlas Backend - Semana 8 (Optimizacion)",
-    "description": "Pruebas del backend de Atlas. El login guarda el token automaticamente; el 'Publicar asincrono' guarda el job_id. Orden sugerido para el video: Login -> Ideas ingenuo/optimizado -> Auth me/me-db -> Dashboard x2 -> Publicar -> Job -> Metrica -> Dashboard.",
+    "name": "Atlas Backend - Semana 13 (CRUD de ideas y autorizacion)",
+    "description": "Pruebas del backend de Atlas. Recorrido completo del CRUD de ideas mas los casos negativos que demuestran la autorizacion por objeto. Ningun id esta escrito a mano: el login guarda el token y cada peticion encadena el id de la respuesta anterior en variables de coleccion, asi que se ejecuta de arriba abajo cuantas veces haga falta con 'newman run Atlas.postman_collection.json'. Orden del video: Salud -> Login -> Auth me/me-db -> Crear -> Detalle -> Editar -> Ideas ingenuo/optimizado -> Dashboard MISS/HIT -> Publicar asincrono/sincrono -> Job -> Metrica -> Dashboard MISS -> Eliminar -> 404 -> Casos negativos.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
     { "key": "baseUrl", "value": "http://localhost:8000" },
     { "key": "token", "value": "" },
-    { "key": "job_id", "value": "" }
+    { "key": "idea_id", "value": "" },
+    { "key": "job_id", "value": "" },
+    { "key": "job_sync_id", "value": "" },
+    { "key": "publicacion_id", "value": "" },
+    { "key": "idea_cebo_id", "value": "" },
+    { "key": "job_cebo_id", "value": "" },
+    { "key": "publicacion_cebo_id", "value": "" },
+    { "key": "qc_ingenuo", "value": "" },
+    { "key": "email_intruso", "value": "" },
+    { "key": "token_intruso", "value": "" }
   ],
   "item": [
     {
-      "name": "0. Salud",
+      "name": "00. Salud",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 y el servicio responde ok', function () {",
+              "    pm.response.to.have.status(200);",
+              "    pm.expect(pm.response.json().status).to.eql('ok');",
+              "});"
+            ]
+          }
+        }
+      ],
       "request": { "method": "GET", "url": "{{baseUrl}}/health" }
     },
     {
-      "name": "1. Auth - Registrar (opcional)",
+      "name": "01. Auth - Registrar (opcional)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('201 al crear, o 409 si ese email quedo registrado en una corrida anterior', function () {",
+              "    pm.expect(pm.response.code).to.be.oneOf([201, 409]);",
+              "});"
+            ]
+          }
+        }
+      ],
       "request": {
         "method": "POST",
         "header": [{ "key": "Content-Type", "value": "application/json" }],
@@ -24,16 +60,18 @@
       }
     },
     {
-      "name": "2. Auth - Login (guarda token)",
+      "name": "02. Auth - Login (guarda token)",
       "event": [
         {
           "listen": "test",
           "script": {
             "type": "text/javascript",
             "exec": [
-              "var data = pm.response.json();",
-              "pm.collectionVariables.set('token', data.access_token);",
-              "pm.test('token recibido', function () { pm.expect(data.access_token).to.be.a('string'); });"
+              "pm.test('200 y devuelve un JWT', function () {",
+              "    pm.response.to.have.status(200);",
+              "    pm.expect(pm.response.json().access_token).to.be.a('string');",
+              "});",
+              "pm.collectionVariables.set('token', pm.response.json().access_token);"
             ]
           }
         }
@@ -46,7 +84,22 @@
       }
     },
     {
-      "name": "3. Auth - Me (JWT, 0 consultas)",
+      "name": "03. Auth - Me (JWT, 0 consultas)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200, identidad completa y X-Query-Count: 0', function () {",
+              "    pm.response.to.have.status(200);",
+              "    pm.expect(pm.response.json()).to.have.all.keys('id', 'email', 'nombre');",
+              "    pm.expect(pm.response.headers.get('X-Query-Count')).to.eql('0');",
+              "});"
+            ]
+          }
+        }
+      ],
       "request": {
         "method": "GET",
         "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
@@ -54,7 +107,21 @@
       }
     },
     {
-      "name": "4. Auth - Me-DB (ingenuo, 1 consulta)",
+      "name": "04. Auth - Me-DB (ingenuo, 1 consulta)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 y esta vez si consulto la base (X-Query-Count > 0)', function () {",
+              "    pm.response.to.have.status(200);",
+              "    pm.expect(Number(pm.response.headers.get('X-Query-Count'))).to.be.above(0);",
+              "});"
+            ]
+          }
+        }
+      ],
       "request": {
         "method": "GET",
         "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
@@ -62,7 +129,108 @@
       }
     },
     {
-      "name": "5. Ideas - Listar INGENUO (N+1)",
+      "name": "05. Ideas - Crear (guarda idea_id)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('201 y devuelve el detalle, con contenido incluido', function () {",
+              "    pm.response.to.have.status(201);",
+              "    var idea = pm.response.json();",
+              "    pm.expect(idea.id).to.be.a('number');",
+              "    pm.expect(idea.contenido).to.be.a('string');",
+              "    pm.expect(idea.etiquetas).to.include('productividad');",
+              "});",
+              "pm.collectionVariables.set('idea_id', pm.response.json().id);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "body": { "mode": "raw", "raw": "{\n  \"titulo\": \"Idea creada desde Postman\",\n  \"contenido\": \"Recorrido completo del CRUD: crear, leer, editar y borrar.\",\n  \"origen\": \"texto\",\n  \"etiquetas\": [\"ia\", \"productividad\"]\n}" },
+        "url": "{{baseUrl}}/ideas"
+      }
+    },
+    {
+      "name": "06. Ideas - Detalle (si trae contenido)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200, es la idea creada y el detalle si incluye contenido', function () {",
+              "    pm.response.to.have.status(200);",
+              "    var idea = pm.response.json();",
+              "    pm.expect(idea.id).to.eql(Number(pm.collectionVariables.get('idea_id')));",
+              "    pm.expect(idea.contenido).to.be.a('string').and.not.empty;",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": "{{baseUrl}}/ideas/{{idea_id}}"
+      }
+    },
+    {
+      "name": "07. Ideas - Editar (PATCH parcial)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200, aplica solo lo enviado y reemplaza la coleccion de etiquetas', function () {",
+              "    pm.response.to.have.status(200);",
+              "    var idea = pm.response.json();",
+              "    pm.expect(idea.titulo).to.eql('Idea editada desde Postman');",
+              "    pm.expect(idea.etiquetas).to.have.members(['ia', 'crud']);",
+              "    pm.expect(idea.contenido).to.be.a('string');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "PATCH",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "body": { "mode": "raw", "raw": "{\n  \"titulo\": \"Idea editada desde Postman\",\n  \"etiquetas\": [\"ia\", \"crud\"]\n}" },
+        "url": "{{baseUrl}}/ideas/{{idea_id}}"
+      }
+    },
+    {
+      "name": "08. Ideas - Listar INGENUO (N+1)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200, lista ligera (sin contenido) y X-Query-Count creciente por el N+1', function () {",
+              "    pm.response.to.have.status(200);",
+              "    var ideas = pm.response.json();",
+              "    pm.expect(ideas).to.be.an('array').that.is.not.empty;",
+              "    pm.expect(ideas[0]).to.not.have.property('contenido');",
+              "    pm.expect(Number(pm.response.headers.get('X-Query-Count'))).to.be.at.least(3);",
+              "});",
+              "pm.collectionVariables.set('qc_ingenuo', pm.response.headers.get('X-Query-Count'));"
+            ]
+          }
+        }
+      ],
       "request": {
         "method": "GET",
         "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
@@ -75,7 +243,24 @@
       }
     },
     {
-      "name": "6. Ideas - Listar OPTIMIZADO (eager)",
+      "name": "09. Ideas - Listar OPTIMIZADO (eager)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200, X-Query-Count constante (3) y nunca peor que el listado ingenuo', function () {",
+              "    pm.response.to.have.status(200);",
+              "    pm.expect(pm.response.json()).to.be.an('array');",
+              "    var consultas = Number(pm.response.headers.get('X-Query-Count'));",
+              "    pm.expect(consultas).to.be.at.most(3);",
+              "    pm.expect(consultas).to.be.at.most(Number(pm.collectionVariables.get('qc_ingenuo')));",
+              "});"
+            ]
+          }
+        }
+      ],
       "request": {
         "method": "GET",
         "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
@@ -88,19 +273,22 @@
       }
     },
     {
-      "name": "7. Ideas - Crear",
-      "request": {
-        "method": "POST",
-        "header": [
-          { "key": "Content-Type", "value": "application/json" },
-          { "key": "Authorization", "value": "Bearer {{token}}" }
-        ],
-        "body": { "mode": "raw", "raw": "{\n  \"titulo\": \"Idea creada en el demo\",\n  \"contenido\": \"Probar el flujo completo del backend optimizado\",\n  \"origen\": \"texto\",\n  \"etiquetas\": [\"ia\", \"productividad\"]\n}" },
-        "url": "{{baseUrl}}/ideas"
-      }
-    },
-    {
-      "name": "8. Dashboard - Metricas (cache-aside)",
+      "name": "10. Dashboard - MISS (el PATCH invalido la clave)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 y X-Cache: MISS, porque la escritura anterior borro la clave', function () {",
+              "    pm.response.to.have.status(200);",
+              "    pm.expect(pm.response.headers.get('X-Cache')).to.eql('MISS');",
+              "    pm.expect(pm.response.json().total_ideas).to.be.a('number');",
+              "});"
+            ]
+          }
+        }
+      ],
       "request": {
         "method": "GET",
         "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
@@ -108,16 +296,42 @@
       }
     },
     {
-      "name": "9. Publicar ASINCRONO (guarda job_id)",
+      "name": "11. Dashboard - HIT (servido desde Redis)",
       "event": [
         {
           "listen": "test",
           "script": {
             "type": "text/javascript",
             "exec": [
-              "var data = pm.response.json();",
-              "pm.collectionVariables.set('job_id', data.job_id);",
-              "pm.test('encolado', function () { pm.expect(data.modo).to.eql('asincrono'); });"
+              "pm.test('200, X-Cache: HIT y 0 consultas a la base', function () {",
+              "    pm.response.to.have.status(200);",
+              "    pm.expect(pm.response.headers.get('X-Cache')).to.eql('HIT');",
+              "    pm.expect(pm.response.headers.get('X-Query-Count')).to.eql('0');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": "{{baseUrl}}/dashboard/metricas"
+      }
+    },
+    {
+      "name": "12. Publicar ASINCRONO (guarda job_id)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('202, encolado: responde al instante sin esperar a la IA', function () {",
+              "    pm.response.to.have.status(202);",
+              "    pm.expect(pm.response.json().modo).to.eql('asincrono');",
+              "    pm.expect(pm.response.json().job_id).to.be.a('string');",
+              "});",
+              "pm.collectionVariables.set('job_id', pm.response.json().job_id);"
             ]
           }
         }
@@ -125,11 +339,25 @@
       "request": {
         "method": "POST",
         "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
-        "url": "{{baseUrl}}/ideas/4/publicar"
+        "url": "{{baseUrl}}/ideas/{{idea_id}}/publicar"
       }
     },
     {
-      "name": "10. Job - Estado",
+      "name": "13. Job - Estado del encolado",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 y el job existe con un estado valido', function () {",
+              "    pm.response.to.have.status(200);",
+              "    pm.expect(pm.response.json().estado).to.be.oneOf(['queued', 'processing', 'done']);",
+              "});"
+            ]
+          }
+        }
+      ],
       "request": {
         "method": "GET",
         "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
@@ -137,20 +365,75 @@
       }
     },
     {
-      "name": "11. Publicar SINCRONO (bloquea ~3s)",
+      "name": "14. Publicar SINCRONO (bloquea ~3s)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 en modo sincrono: el request espero a la IA', function () {",
+              "    pm.response.to.have.status(200);",
+              "    pm.expect(pm.response.json().modo).to.eql('sincrono');",
+              "});",
+              "pm.collectionVariables.set('job_sync_id', pm.response.json().job_id);"
+            ]
+          }
+        }
+      ],
       "request": {
         "method": "POST",
         "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
         "url": {
-          "raw": "{{baseUrl}}/ideas/5/publicar?sync=true",
+          "raw": "{{baseUrl}}/ideas/{{idea_id}}/publicar?sync=true",
           "host": ["{{baseUrl}}"],
-          "path": ["ideas", "5", "publicar"],
+          "path": ["ideas", "{{idea_id}}", "publicar"],
           "query": [{ "key": "sync", "value": "true" }]
         }
       }
     },
     {
-      "name": "12. Metrica - Registrar (invalida cache)",
+      "name": "15. Job - Estado del sincrono (guarda publicacion_id)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200, job terminado y con la publicacion que genero', function () {",
+              "    pm.response.to.have.status(200);",
+              "    var job = pm.response.json();",
+              "    pm.expect(job.estado).to.eql('done');",
+              "    pm.expect(job.resultado_publicacion_id).to.be.a('number');",
+              "});",
+              "pm.collectionVariables.set('publicacion_id', pm.response.json().resultado_publicacion_id);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": "{{baseUrl}}/jobs/{{job_sync_id}}"
+      }
+    },
+    {
+      "name": "16. Metrica - Registrar (invalida cache)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('201 y confirma la invalidacion explicita del cache', function () {",
+              "    pm.response.to.have.status(201);",
+              "    pm.expect(pm.response.json().ok).to.be.true;",
+              "    pm.expect(pm.response.json().cache).to.eql('invalidado');",
+              "});"
+            ]
+          }
+        }
+      ],
       "request": {
         "method": "POST",
         "header": [
@@ -158,8 +441,392 @@
           { "key": "Authorization", "value": "Bearer {{token}}" }
         ],
         "body": { "mode": "raw", "raw": "{\n  \"fuente\": \"manual\",\n  \"likes\": 80,\n  \"comentarios\": 6,\n  \"compartidos\": 3,\n  \"alcance\": 1200\n}" },
-        "url": "{{baseUrl}}/publicaciones/1/metricas"
+        "url": "{{baseUrl}}/publicaciones/{{publicacion_id}}/metricas"
       }
+    },
+    {
+      "name": "17. Dashboard - MISS tras invalidar",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 y vuelve a ser MISS: el reporte se recalculo', function () {",
+              "    pm.response.to.have.status(200);",
+              "    pm.expect(pm.response.headers.get('X-Cache')).to.eql('MISS');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": "{{baseUrl}}/dashboard/metricas"
+      }
+    },
+    {
+      "name": "18. Ideas - Eliminar",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('204 y sin cuerpo, como manda el contrato del DELETE', function () {",
+              "    pm.response.to.have.status(204);",
+              "    pm.expect(pm.response.text()).to.be.empty;",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "DELETE",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": "{{baseUrl}}/ideas/{{idea_id}}"
+      }
+    },
+    {
+      "name": "19. Ideas - Detalle de la idea borrada",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('404: la fila ya no existe', function () {",
+              "    pm.response.to.have.status(404);",
+              "    pm.expect(pm.response.json().detail).to.eql('Idea no encontrada');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": "{{baseUrl}}/ideas/{{idea_id}}"
+      }
+    },
+    {
+      "name": "20. Casos negativos",
+      "description": "Lo que NO debe poder hacerse. El bloque de acceso cruzado es la evidencia de que la autorizacion por objeto quedo cerrada: sobre un recurso ajeno VIVO se responde 404 y no 403, para no revelar que existe.",
+      "item": [
+        {
+          "name": "20.1 Sin cabecera Authorization",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Rechazado sin credenciales: 403 de HTTPBearer (401 si se desactiva auto_error)', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([401, 403]);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": { "method": "GET", "url": "{{baseUrl}}/ideas" }
+        },
+        {
+          "name": "20.2 Token manipulado",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401: la firma del JWT no valida', function () {",
+                  "    pm.response.to.have.status(401);",
+                  "    pm.expect(pm.response.json().detail).to.include('Token');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}manipulado" }],
+            "url": "{{baseUrl}}/ideas"
+          }
+        },
+        {
+          "name": "20.3 Idea cebo del dueno (guarda idea_cebo_id)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201: el acceso cruzado necesita un recurso VIVO, la idea anterior ya se borro', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "    pm.expect(pm.response.json().id).to.be.a('number');",
+                  "});",
+                  "pm.collectionVariables.set('idea_cebo_id', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"titulo\": \"Idea cebo para los casos negativos\",\n  \"contenido\": \"Queda viva a proposito: sobre ella se prueba el acceso cruzado.\",\n  \"origen\": \"texto\",\n  \"etiquetas\": [\"seguridad\"]\n}" },
+            "url": "{{baseUrl}}/ideas"
+          }
+        },
+        {
+          "name": "20.4 PATCH sin ningun campo",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 con detalle: No se envio ningun campo que actualizar', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "    pm.expect(pm.response.json().detail).to.be.a('string').and.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{}" },
+            "url": "{{baseUrl}}/ideas/{{idea_cebo_id}}"
+          }
+        },
+        {
+          "name": "20.5 El dueno publica el cebo (guarda job_cebo_id)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200: crea una publicacion y un job que pertenecen al dueno', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().modo).to.eql('sincrono');",
+                  "});",
+                  "pm.collectionVariables.set('job_cebo_id', pm.response.json().job_id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/ideas/{{idea_cebo_id}}/publicar?sync=true",
+              "host": ["{{baseUrl}}"],
+              "path": ["ideas", "{{idea_cebo_id}}", "publicar"],
+              "query": [{ "key": "sync", "value": "true" }]
+            }
+          }
+        },
+        {
+          "name": "20.6 Job del cebo (guarda publicacion_cebo_id)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 y trae el id de la publicacion generada', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().resultado_publicacion_id).to.be.a('number');",
+                  "});",
+                  "pm.collectionVariables.set('publicacion_cebo_id', pm.response.json().resultado_publicacion_id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseUrl}}/jobs/{{job_cebo_id}}"
+          }
+        },
+        {
+          "name": "20.7 Registrar al intruso (guarda token_intruso)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('email_intruso', 'intruso-' + Date.now() + '@atlas.app');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201: segundo usuario con token valido; el email lleva marca de tiempo para poder repetir la corrida', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "    pm.expect(pm.response.json().access_token).to.be.a('string');",
+                  "});",
+                  "pm.collectionVariables.set('token_intruso', pm.response.json().access_token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{email_intruso}}\",\n  \"nombre\": \"Usuario Intruso\",\n  \"password\": \"atlas123\",\n  \"tono\": \"profesional\"\n}" },
+            "url": "{{baseUrl}}/auth/register"
+          }
+        },
+        {
+          "name": "20.8 El intruso lee la idea ajena",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404: la idea existe, pero no es suya', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "    pm.expect(pm.response.json().detail).to.eql('Idea no encontrada');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token_intruso}}" }],
+            "url": "{{baseUrl}}/ideas/{{idea_cebo_id}}"
+          }
+        },
+        {
+          "name": "20.9 El intruso edita la idea ajena",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404: el filtro por dueno va dentro del WHERE, no en un if posterior', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token_intruso}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"titulo\": \"Secuestrada\"\n}" },
+            "url": "{{baseUrl}}/ideas/{{idea_cebo_id}}"
+          }
+        },
+        {
+          "name": "20.10 El intruso borra la idea ajena",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404: no se borra ninguna fila', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token_intruso}}" }],
+            "url": "{{baseUrl}}/ideas/{{idea_cebo_id}}"
+          }
+        },
+        {
+          "name": "20.11 El intruso consulta el job ajeno",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404: saber el uuid del job ya no basta para verlo', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token_intruso}}" }],
+            "url": "{{baseUrl}}/jobs/{{job_cebo_id}}"
+          }
+        },
+        {
+          "name": "20.12 El intruso escribe metricas ajenas",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404: no se pueden inflar las metricas de la publicacion de otro', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token_intruso}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"fuente\": \"manual\",\n  \"likes\": 9999,\n  \"comentarios\": 0,\n  \"compartidos\": 0,\n  \"alcance\": 0\n}" },
+            "url": "{{baseUrl}}/publicaciones/{{publicacion_cebo_id}}/metricas"
+          }
+        },
+        {
+          "name": "20.13 El dueno si borra su idea cebo",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('204: mismo request que 20.10 con distinto token; ademas deja la base como estaba', function () {",
+                  "    pm.response.to.have.status(204);",
+                  "    pm.expect(pm.response.text()).to.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseUrl}}/ideas/{{idea_cebo_id}}"
+          }
+        }
+      ]
     }
   ]
 }

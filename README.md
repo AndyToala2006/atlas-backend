@@ -11,6 +11,15 @@ técnicas de optimización: **caché-aside**, **corrección de N+1**, **cola de
 trabajo asíncrona**, **lazy/eager loading justificado** y **autenticación sin
 consultas redundantes**, comparando el comportamiento antes y después.
 
+> **Actualización (Semana 13).** El **CRUD de ideas queda completo**: a la lectura
+> y la creación se suman `PATCH /ideas/{id}` y `DELETE /ideas/{id}`, que la app
+> Flutter ya consume. Con ello entra una **sexta técnica de optimización**,
+> el **control del tamaño de la respuesta** (§4.6), y las **tres escrituras de
+> ideas** invalidan la clave de caché del dashboard (§4.1). Se cerraron además dos
+> fallos de autorización por objeto (IDOR) en `/jobs/{id}` y en
+> `/publicaciones/{id}/metricas`: el dueño se filtra **dentro del `WHERE`** y el
+> recurso ajeno responde `404`, sin revelar que existe.
+
 ---
 
 ## 1. Stack y arquitectura
@@ -91,9 +100,14 @@ Archivos: [app/cache.py](app/cache.py) · [app/routers/dashboard.py](app/routers
   sin tocar la base; si no (**MISS**) consulta, guarda en Redis con **TTL de 60 s**
   (`CACHE_TTL_SECONDS`) y responde.
 - **Invalidación explícita:** al registrar una métrica
-  ([app/routers/publicaciones.py](app/routers/publicaciones.py)) o al generar una
-  publicación en el worker, se borra la clave `atlas:dashboard:user:{id}`, de modo
-  que el siguiente request recalcule con datos frescos.
+  ([app/routers/publicaciones.py](app/routers/publicaciones.py)), al generar una
+  publicación en el worker y en las **tres escrituras de ideas** —`POST /ideas`,
+  `PATCH /ideas/{id}` y `DELETE /ideas/{id}`
+  ([app/routers/ideas.py](app/routers/ideas.py))— se borra la clave
+  `atlas:dashboard:user:{id}`, de modo que el siguiente request recalcule con
+  datos frescos. Las escrituras de ideas se añadieron porque el reporte incluye
+  `total_ideas`: sin invalidar, el panel seguía mostrando el conteo anterior
+  hasta que venciera el TTL.
 
 ### 4.2 Corrección de la consulta N+1 (eager loading)
 Archivo: [app/routers/ideas.py](app/routers/ideas.py)
@@ -132,6 +146,27 @@ Archivos: [app/security.py](app/security.py) · [app/deps.py](app/deps.py) · [a
   por request. La versión ingenua `get_current_user_db` (endpoint `/auth/me-db`)
   se conserva solo para comparar.
 
+### 4.6 Control del tamaño de la respuesta (listado ligero vs. detalle)
+Archivos: [app/schemas.py](app/schemas.py) · [app/routers/ideas.py](app/routers/ideas.py)
+
+`contenido` es el campo pesado de una idea (columna `Text`: el texto completo que
+escribió el usuario) y **el listado no lo necesita**, porque la pantalla de ideas
+solo muestra título, estado, etiquetas y número de publicaciones. Devolverlo en la
+lista sería transferir N textos largos que nadie lee: carga innecesaria de datos.
+Por eso el recurso se modela con **dos esquemas** en lugar de uno:
+
+| Esquema | Campos | Se usa en |
+|---|---|---|
+| `IdeaOut` | `id`, `titulo`, `estado`, `origen`, `etiquetas`, `num_publicaciones`, `creado_en` | `GET /ideas` |
+| `IdeaDetalleOut(IdeaOut)` | los anteriores **+ `contenido`** | `GET /ideas/{id}`, `POST /ideas`, `PATCH /ideas/{id}` |
+
+El detalle sí lo trae, que es cuando el usuario abre una idea concreta y el texto
+es justamente lo que quiere leer. `DELETE /ideas/{id}` lleva la misma idea al
+extremo: responde **204 sin cuerpo**, porque no hay nada útil que devolver.
+
+En el cliente Flutter esta decisión se refleja en que `Idea.contenido` es
+**nulable**: llega `null` desde el listado y con valor desde el detalle.
+
 ---
 
 ## 5. Resultados medidos (antes → después)
@@ -153,19 +188,31 @@ estos números desde Postman o `pruebas/pruebas.http`.
 
 ## 6. Endpoints
 
-| Método | Ruta | Descripción |
-|---|---|---|
-| POST | `/auth/register` | Registrar usuario (devuelve JWT) |
-| POST | `/auth/login` | Iniciar sesión (devuelve JWT) |
-| GET | `/auth/me` | Perfil desde el JWT (0 consultas) |
-| GET | `/auth/me-db` | Perfil consultando la base (comparación) |
-| GET | `/ideas?optimized=` | Listar ideas (N+1 vs eager) |
-| POST | `/ideas` | Crear idea con etiquetas |
-| GET | `/ideas/{id}` | Obtener una idea |
-| POST | `/ideas/{id}/publicar?sync=` | Generar publicación (async / sync) |
-| GET | `/jobs/{id}` | Estado del trabajo encolado |
-| POST | `/publicaciones/{id}/metricas` | Registrar métrica (invalida caché) |
-| GET | `/dashboard/metricas` | Reporte analítico (caché-aside) |
+La columna **Token** indica si la ruta exige la cabecera
+`Authorization: Bearer <jwt>`. Sin ella, o con un token manipulado, responden
+**401**. Las rutas de ideas, jobs y publicaciones filtran además por el usuario del
+token dentro del propio `WHERE`: si el recurso es de otro dueño la respuesta es
+**404**, no 403, para no revelar que existe.
+
+| Método | Ruta | Descripción | Token |
+|---|---|---|:---:|
+| GET | `/health` | Estado del servicio | — |
+| POST | `/auth/register` | Registrar usuario (devuelve JWT) | — |
+| POST | `/auth/login` | Iniciar sesión (devuelve JWT) | — |
+| GET | `/auth/me` | Perfil desde el JWT (0 consultas) | ✔ |
+| GET | `/auth/me-db` | Perfil consultando la base (comparación) | ✔ |
+| GET | `/ideas?optimized=` | Listar ideas del usuario, sin `contenido` (N+1 vs eager) | ✔ |
+| POST | `/ideas` | Crear idea con etiquetas → `201` con el detalle | ✔ |
+| GET | `/ideas/{id}` | Obtener una idea con su `contenido` | ✔ |
+| PATCH | `/ideas/{id}` | Editar parcialmente título, contenido, origen o etiquetas; devuelve el detalle actualizado (`400` si el cuerpo va vacío) | ✔ |
+| DELETE | `/ideas/{id}` | Eliminar la idea y, con ella, sus publicaciones, métricas, jobs y filas de `idea_etiqueta` (las etiquetas son catálogo compartido y se conservan) → `204` sin cuerpo | ✔ |
+| POST | `/ideas/{id}/publicar?sync=` | Generar publicación (async / sync) | ✔ |
+| GET | `/jobs/{id}` | Estado del trabajo encolado (solo jobs propios) | ✔ |
+| POST | `/publicaciones/{id}/metricas` | Registrar métrica en una publicación propia (invalida caché) | ✔ |
+| GET | `/dashboard/metricas` | Reporte analítico (caché-aside) | ✔ |
+
+Las tres escrituras de `/ideas` (`POST`, `PATCH`, `DELETE`) invalidan la clave del
+dashboard del usuario, porque el reporte cuenta ideas (§4.1).
 
 ---
 
