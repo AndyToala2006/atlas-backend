@@ -5,3 +5,9 @@ __pycache__/
 venv/
 .pytest_cache/
 *.log
+
+# Material personal de clase (guiones de video y foros): vive fuera del
+# repositorio, en C:\Proyectos\atlas-entregas.
+GUION_VIDEO*
+FORO_*
+PrubasV.md
