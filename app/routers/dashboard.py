@@ -33,16 +33,24 @@ def _calcular_dashboard(db, uid: int) -> dict:
         .join(Idea, Publicacion.idea_id == Idea.id)
         .where(Idea.usuario_id == uid)
     )
+    # Cada fila de metrica_publicacion es una FOTO del rendimiento en un momento
+    # dado, no un incremento: si una publicación se midió el lunes (100 likes) y
+    # el viernes (250 likes), su engagement es 250, no 350. Por eso se suma solo
+    # el registro más reciente de cada publicación (el de mayor id).
+    ultimas = (
+        select(func.max(MetricaPublicacion.id))
+        .join(Publicacion, MetricaPublicacion.publicacion_id == Publicacion.id)
+        .join(Idea, Publicacion.idea_id == Idea.id)
+        .where(Idea.usuario_id == uid)
+        .group_by(MetricaPublicacion.publicacion_id)
+    )
     likes, comentarios, compartidos, alcance = db.execute(
         select(
             func.coalesce(func.sum(MetricaPublicacion.likes), 0),
             func.coalesce(func.sum(MetricaPublicacion.comentarios), 0),
             func.coalesce(func.sum(MetricaPublicacion.compartidos), 0),
             func.coalesce(func.sum(MetricaPublicacion.alcance), 0),
-        )
-        .join(Publicacion, MetricaPublicacion.publicacion_id == Publicacion.id)
-        .join(Idea, Publicacion.idea_id == Idea.id)
-        .where(Idea.usuario_id == uid)
+        ).where(MetricaPublicacion.id.in_(ultimas))
     ).one()
     top = db.execute(
         select(Etiqueta.nombre, func.count(idea_etiqueta.c.idea_id))

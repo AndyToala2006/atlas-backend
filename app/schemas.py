@@ -120,6 +120,42 @@ class IdeaDetalleOut(IdeaOut):
 
 
 # ---- Publicaciones / Jobs ----
+class PublicarIn(BaseModel):
+    """Cuerpo OPCIONAL de POST /ideas/{id}/publicar.
+
+    Sin cuerpo se publica para Instagram, que era el único destino hasta la
+    Semana 15: así los clientes anteriores (Postman, la consola /demo) siguen
+    funcionando sin cambios.
+    """
+
+    red_social: str = Field(default="instagram", pattern="^(instagram|linkedin|x)$")
+
+
+class MetricaOut(BaseModel):
+    id: int
+    fuente: str
+    likes: int
+    comentarios: int
+    compartidos: int
+    alcance: int
+    fecha: datetime
+
+
+class PublicacionOut(BaseModel):
+    id: int
+    idea_id: int
+    red_social: str
+    contenido_generado: str
+    tono: str
+    estado: str
+    modelo_ia: str
+    creado_en: datetime
+    # Último registro de rendimiento (o null si aún no se midió) y cuántos hay:
+    # permite comparar publicaciones sin pedir el historial de cada una.
+    ultima_metrica: MetricaOut | None = None
+    num_metricas: int = 0
+
+
 class PublicarOut(BaseModel):
     job_id: str
     estado: str
@@ -135,8 +171,14 @@ class JobOut(BaseModel):
 
 
 class MetricaCreate(BaseModel):
+    """Un registro de rendimiento en un momento dado (una "foto" de la publicación).
+
+    Las métricas de una red nunca son negativas: sin `ge=0`, un -500 en likes
+    restaría del panel de engagement de todo el usuario.
+    """
+
     fuente: str = Field(default="manual", pattern="^(manual|api)$")
-    likes: int = 0
-    comentarios: int = 0
-    compartidos: int = 0
-    alcance: int = 0
+    likes: int = Field(default=0, ge=0, le=1_000_000_000)
+    comentarios: int = Field(default=0, ge=0, le=1_000_000_000)
+    compartidos: int = Field(default=0, ge=0, le=1_000_000_000)
+    alcance: int = Field(default=0, ge=0, le=1_000_000_000)

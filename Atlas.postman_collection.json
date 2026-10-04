@@ -1,7 +1,7 @@
 {
   "info": {
-    "name": "Atlas Backend - Semana 13 (CRUD de ideas y autorizacion)",
-    "description": "Pruebas del backend de Atlas. Recorrido completo del CRUD de ideas mas los casos negativos que demuestran la autorizacion por objeto. Ningun id esta escrito a mano: el login guarda el token y cada peticion encadena el id de la respuesta anterior en variables de coleccion, asi que se ejecuta de arriba abajo cuantas veces haga falta con 'newman run Atlas.postman_collection.json'. Orden del video: Salud -> Login -> Auth me/me-db -> Crear -> Detalle -> Editar -> Ideas ingenuo/optimizado -> Dashboard MISS/HIT -> Publicar asincrono/sincrono -> Job -> Metrica -> Dashboard MISS -> Eliminar -> 404 -> Casos negativos.",
+    "name": "Atlas Backend - Semana 15 (CRUD, autorizacion e IA real)",
+    "description": "Pruebas del backend de Atlas. Recorrido completo del CRUD de ideas mas los casos negativos que demuestran la autorizacion por objeto. Ningun id esta escrito a mano: el login guarda el token y cada peticion encadena el id de la respuesta anterior en variables de coleccion, asi que se ejecuta de arriba abajo cuantas veces haga falta con 'newman run Atlas.postman_collection.json'. Orden del video: Salud -> Login -> Auth me/me-db -> Crear -> Detalle -> Editar -> Ideas ingenuo/optimizado -> Dashboard MISS/HIT -> Publicar asincrono/sincrono -> Job -> Publicaciones de la idea -> Red no admitida -> Metrica -> Dashboard MISS -> Eliminar -> 404 -> Casos negativos.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -418,6 +418,61 @@
       }
     },
     {
+      "name": "15b. Publicaciones de la idea (Semana 15)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 y la lista trae el texto generado por la IA', function () {",
+              "    pm.response.to.have.status(200);",
+              "    const lista = pm.response.json();",
+              "    pm.expect(lista).to.be.an('array').that.is.not.empty;",
+              "    pm.expect(lista[0].contenido_generado).to.be.a('string').and.not.empty;",
+              "    pm.expect(lista[0]).to.have.property('modelo_ia');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": {
+          "raw": "{{baseUrl}}/ideas/{{idea_id}}/publicaciones",
+          "host": ["{{baseUrl}}"],
+          "path": ["ideas", "{{idea_id}}", "publicaciones"]
+        }
+      }
+    },
+    {
+      "name": "15c. Publicar con red no admitida (422)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('422: la red social se valida en el esquema PublicarIn', function () {",
+              "    pm.response.to.have.status(422);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }, { "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\"red_social\": \"tiktok\"}" },
+        "url": {
+          "raw": "{{baseUrl}}/ideas/{{idea_id}}/publicar",
+          "host": ["{{baseUrl}}"],
+          "path": ["ideas", "{{idea_id}}", "publicar"]
+        }
+      }
+    },
+    {
       "name": "16. Metrica - Registrar (invalida cache)",
       "event": [
         {
@@ -777,6 +832,31 @@
             "method": "GET",
             "header": [{ "key": "Authorization", "value": "Bearer {{token_intruso}}" }],
             "url": "{{baseUrl}}/jobs/{{job_cebo_id}}"
+          }
+        },
+        {
+          "name": "20.11b El intruso lee las publicaciones ajenas",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 y no 403: no se revela que la idea existe', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token_intruso}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/ideas/{{idea_cebo_id}}/publicaciones",
+              "host": ["{{baseUrl}}"],
+              "path": ["ideas", "{{idea_cebo_id}}", "publicaciones"]
+            }
           }
         },
         {

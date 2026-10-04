@@ -20,6 +20,15 @@ consultas redundantes**, comparando el comportamiento antes y después.
 > `/publicaciones/{id}/metricas`: el dueño se filtra **dentro del `WHERE`** y el
 > recurso ajeno responde `404`, sin revelar que existe.
 
+> **Actualización (Semana 15): IA real.** El worker ya no simula la redacción:
+> llama a un **modelo de lenguaje a través de [OpenRouter](https://openrouter.ai)**
+> (§4.7). `POST /ideas/{id}/publicar` acepta la red de destino
+> (`instagram`, `linkedin` o `x`) y el nuevo `GET /ideas/{id}/publicaciones`
+> devuelve los textos generados para que la app los muestre. Si el trabajo falla
+> (key inválida, sin saldo, límite de peticiones), el job queda en `error` con un
+> mensaje legible y la idea **vuelve a su estado anterior** en vez de quedarse en
+> `procesando` para siempre. El módulo de IA tiene pruebas unitarias propias (§4.8).
+
 ---
 
 ## 1. Stack y arquitectura
@@ -127,6 +136,64 @@ instante con `job_id` y estado `queued`. El **worker** procesa en segundo plano
 (`queued → processing → done`) y el cliente consulta el avance en `GET /jobs/{id}`.
 El parámetro `?sync=true` fuerza el modo bloqueante **solo para comparar tiempos**.
 
+### 4.7 Generación con IA real (OpenRouter)
+Archivos: [app/ia.py](app/ia.py) · [app/tasks/jobs.py](app/tasks/jobs.py) · [.env.example](.env.example)
+
+El worker arma un *prompt* con el título y el contenido de la idea, el **tono del
+perfil** del usuario (`cercano`, `profesional`, `inspirador`) y las reglas de
+formato de la red elegida (longitud, hashtags y emojis; en X se garantiza el
+límite de 280 caracteres). Luego llama a `https://openrouter.ai/api/v1/chat/completions`,
+una API compatible con la de OpenAI, así que **cambiar de modelo es cambiar una
+variable de entorno**, no el código.
+
+| Variable (`.env`) | Uso |
+|---|---|
+| `OPENROUTER_API_KEY` | Key de https://openrouter.ai/keys. **Vive solo en el servidor**: la app nunca la recibe, así que no se puede extraer de la APK. Vacía = generador simulado (`atlas-sim-1`). |
+| `OPENROUTER_MODEL` | Modelo del catálogo (por defecto `anthropic/claude-haiku-4.5`). Los terminados en `:free` no consumen saldo. |
+
+Cada publicación guarda en `modelo_ia` qué modelo la escribió, así que en la base
+queda la trazabilidad entre texto real y simulado. La llamada usa `urllib` de la
+librería estándar: no se añadió ninguna dependencia.
+
+Tras poner la key en `.env`: `docker compose up -d --force-recreate api worker`.
+
+### 4.8 Pruebas unitarias del módulo de IA
+
+```powershell
+py -m unittest discover -s tests -t . -v      # o: python -m ...
+```
+
+Siete pruebas en [tests/test_ia.py](tests/test_ia.py), sin base de datos, sin Redis
+y sin red (OpenRouter se sustituye con `unittest.mock`): el *prompt* lleva tono y
+red, X nunca supera 280 caracteres, sin key no se toca la red, una respuesta vacía
+es un error y no una publicación vacía, y un `402` se traduce a "sin saldo".
+
+### 4.9 Paginación, búsqueda y ordenamiento del listado
+Archivo: [app/routers/ideas.py](app/routers/ideas.py)
+
+`GET /ideas` acepta `limit` (1–100, por defecto 20), `offset`, `q` (busca en título
+y contenido sin distinguir mayúsculas; los comodines `%` y `_` se escapan) y
+`estado`. El orden es `creado_en DESC, id DESC`: el `id` desempata filas creadas en
+el mismo instante, sin lo cual una idea podría repetirse o perderse entre páginas.
+
+El total de coincidencias viaja en la cabecera **`X-Total-Count`** y se obtiene con
+`COUNT(*) OVER ()` **en la misma consulta** (la función de ventana se evalúa antes
+del `LIMIT`): paginar no añade un viaje a la base y el listado optimizado sigue en
+**3 consultas**.
+
+### 4.10 Métricas como fotos en el tiempo
+Archivos: [app/routers/publicaciones.py](app/routers/publicaciones.py) · [app/routers/dashboard.py](app/routers/dashboard.py)
+
+Cada fila de `metrica_publicacion` es una **foto** del rendimiento en un momento
+dado, no un incremento. Así se puede seguir la evolución de una publicación
+(`GET /publicaciones/{id}/metricas`), pero el panel **no** puede sumar todas las
+filas: una publicación medida con 100 likes el lunes y 250 el viernes tiene 250, no
+350. El dashboard suma solo el registro más reciente de cada publicación (subconsulta
+`MAX(id) ... GROUP BY publicacion_id`), sin consultas adicionales.
+`GET /ideas/{id}/publicaciones` incluye `ultima_metrica` y `num_metricas` de cada
+publicación con un `selectinload` (una consulta extra, no una por publicación), y
+`MetricaCreate` rechaza valores negativos con `422`.
+
 ### 4.4 Lazy vs eager loading justificado
 Archivo: [app/models.py](app/models.py)
 
@@ -201,14 +268,16 @@ token dentro del propio `WHERE`: si el recurso es de otro dueño la respuesta es
 | POST | `/auth/login` | Iniciar sesión (devuelve JWT) | — |
 | GET | `/auth/me` | Perfil desde el JWT (0 consultas) | ✔ |
 | GET | `/auth/me-db` | Perfil consultando la base (comparación) | ✔ |
-| GET | `/ideas?optimized=` | Listar ideas del usuario, sin `contenido` (N+1 vs eager) | ✔ |
+| GET | `/ideas?optimized=&limit=&offset=&q=&estado=` | Listar ideas del usuario, sin `contenido`, **paginado** (20 por defecto, máx. 100) y con búsqueda; total en `X-Total-Count` (N+1 vs eager con `optimized`) | ✔ |
 | POST | `/ideas` | Crear idea con etiquetas → `201` con el detalle | ✔ |
 | GET | `/ideas/{id}` | Obtener una idea con su `contenido` | ✔ |
 | PATCH | `/ideas/{id}` | Editar parcialmente título, contenido, origen o etiquetas; devuelve el detalle actualizado (`400` si el cuerpo va vacío) | ✔ |
 | DELETE | `/ideas/{id}` | Eliminar la idea y, con ella, sus publicaciones, métricas, jobs y filas de `idea_etiqueta` (las etiquetas son catálogo compartido y se conservan) → `204` sin cuerpo | ✔ |
-| POST | `/ideas/{id}/publicar?sync=` | Generar publicación (async / sync) | ✔ |
-| GET | `/jobs/{id}` | Estado del trabajo encolado (solo jobs propios) | ✔ |
-| POST | `/publicaciones/{id}/metricas` | Registrar métrica en una publicación propia (invalida caché) | ✔ |
+| POST | `/ideas/{id}/publicar?sync=` | Generar publicación con IA (async → `202` / sync). Cuerpo opcional `{"red_social": "instagram\|linkedin\|x"}`; `422` si la red no es válida | ✔ |
+| GET | `/jobs/{id}` | Estado del trabajo encolado (solo jobs propios): `queued`, `processing`, `done` con `resultado_publicacion_id`, o `error` con el motivo | ✔ |
+| GET | `/ideas/{id}/publicaciones` | Publicaciones generadas para la idea, la más reciente primero (texto, red, tono, modelo de IA, `ultima_metrica`, `num_metricas`) | ✔ |
+| GET | `/publicaciones/{id}/metricas` | Historial de rendimiento de una publicación propia, del registro más antiguo al último | ✔ |
+| POST | `/publicaciones/{id}/metricas` | Registrar una métrica (foto del rendimiento) en una publicación propia; `422` si hay valores negativos; invalida caché | ✔ |
 | GET | `/dashboard/metricas` | Reporte analítico (caché-aside) | ✔ |
 
 Las tres escrituras de `/ideas` (`POST`, `PATCH`, `DELETE`) invalidan la clave del
@@ -228,9 +297,11 @@ atlas-backend/
 │  ├─ schemas.py         # Esquemas Pydantic
 │  ├─ security.py        # bcrypt + JWT
 │  ├─ cache.py           # Caché-aside sobre Redis
+│  ├─ ia.py              # Generación con IA (OpenRouter) + respaldo simulado
 │  ├─ deps.py            # Sesión de BD + usuario autenticado
 │  ├─ routers/           # auth, ideas, publicaciones, dashboard
 │  └─ tasks/             # Celery (celery_app.py, jobs.py)
+├─ tests/                # Pruebas unitarias (python -m unittest)
 ├─ seed.py               # Datos de prueba
 ├─ docker-compose.yml    # db + redis + api + worker
 ├─ Dockerfile

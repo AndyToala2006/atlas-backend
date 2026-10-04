@@ -110,6 +110,28 @@ Authorization: Bearer {{token}}
 ###
 @publicacionId = {{jobSincrono.response.body.resultado_publicacion_id}}
 
+### 14b. (Semana 15) Publicar para OTRA red: LinkedIn -> 202 (la IA redacta con otro formato)
+POST {{baseUrl}}/ideas/{{ideaId}}/publicar
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{"red_social": "linkedin"}
+
+### 14c. (Semana 15) Publicaciones de la idea -> 200, la mas reciente primero, con modelo_ia y ultima_metrica
+GET {{baseUrl}}/ideas/{{ideaId}}/publicaciones
+Authorization: Bearer {{token}}
+
+### 14e. (Semana 15) Paginacion + busqueda -> 200, total en la cabecera X-Total-Count
+GET {{baseUrl}}/ideas?limit=5&offset=0&q=contenido
+Authorization: Bearer {{token}}
+
+### 14d. (Semana 15) Red no admitida -> 422 (validacion del esquema PublicarIn)
+POST {{baseUrl}}/ideas/{{ideaId}}/publicar
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{"red_social": "tiktok"}
+
 ### 15. Registrar metrica sobre esa publicacion -> 201 {"ok":true,"cache":"invalidado"}
 POST {{baseUrl}}/publicaciones/{{publicacionId}}/metricas
 Authorization: Bearer {{token}}

@@ -46,6 +46,9 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://atlas:atlas@db:5432/atlas}
       DB_SCHEMA: ${DB_SCHEMA:-}
       REDIS_URL: redis://redis:6379/0
+      # IA real (OpenRouter). Se leen del archivo .env; vacía = generador simulado.
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-anthropic/claude-haiku-4.5}
     volumes:
       - .:/code
     ports:
@@ -64,6 +67,9 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://atlas:atlas@db:5432/atlas}
       DB_SCHEMA: ${DB_SCHEMA:-}
       REDIS_URL: redis://redis:6379/0
+      # IA real (OpenRouter). Se leen del archivo .env; vacía = generador simulado.
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-anthropic/claude-haiku-4.5}
     volumes:
       - .:/code
     depends_on:

@@ -1,15 +1,15 @@
 """Tarea asíncrona: transformar una idea en una publicación con IA.
 
 Este es el caso real de Atlas que justifica una cola de trabajo: generar la
-publicación es LENTO (llamada a un modelo de lenguaje). Si se hiciera dentro del
-request, el usuario esperaría varios segundos con la app bloqueada. En su lugar
-el endpoint encola el trabajo y responde al instante; el worker lo procesa.
+publicación es LENTO (llamada a un modelo de lenguaje por OpenRouter, varios
+segundos). Si se hiciera dentro del request, el usuario esperaría con la app
+bloqueada. En su lugar el endpoint encola el trabajo y responde al instante; el
+worker lo procesa y la app consulta `GET /jobs/{id}` hasta que termina.
 """
-import time
-
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
+from .. import ia
 from ..cache import cache_invalidate, dashboard_key
 from ..config import settings
 from ..database import SessionLocal
@@ -17,24 +17,7 @@ from ..models import Idea, Job, Publicacion, Usuario
 from .celery_app import celery_app
 
 
-def _generar_texto(contenido: str, tono: str, red_social: str) -> str:
-    """Simula la generación con IA (aquí iría la llamada al modelo de lenguaje)."""
-    base = contenido.strip().rstrip(".")
-    plantillas = {
-        "cercano": f"Te cuento algo: {base}. ¿Te ha pasado? Cuéntame en los comentarios.",
-        "profesional": f"Reflexión del día: {base}. Un principio simple con gran impacto.",
-        "inspirador": f"{base}. Da el primer paso hoy: el momento perfecto no existe.",
-    }
-    cuerpo = plantillas.get(tono, f"{base}.")
-    hashtags = {
-        "instagram": "#ideas #contenido #atlas",
-        "linkedin": "#productividad #crecimiento #atlas",
-        "x": "#build #atlas",
-    }.get(red_social, "#atlas")
-    return f"{cuerpo}\n\n{hashtags}"
-
-
-def procesar_publicacion(job_id: str) -> None:
+def procesar_publicacion(job_id: str, red_social: str = "instagram") -> None:
     """Lógica de negocio del trabajo. La usan tanto el worker como el modo síncrono."""
     db = SessionLocal()
     try:
@@ -52,17 +35,27 @@ def procesar_publicacion(job_id: str) -> None:
             .where(Idea.id == job.idea_id)
         ).scalar_one()
 
-        # Latencia real de la IA (simulada) — esto es lo que sacamos del request.
-        time.sleep(settings.ia_latency_ms / 1000)
-
         tono = idea.usuario.perfil_tono.nombre if idea.usuario.perfil_tono else "neutral"
+
+        # La llamada lenta: esto es exactamente lo que se sacó del request.
+        generado = ia.generar_publicacion(
+            titulo=idea.titulo,
+            contenido=idea.contenido,
+            tono=tono,
+            red_social=red_social,
+            api_key=settings.openrouter_api_key,
+            modelo=settings.openrouter_model,
+            timeout_s=settings.openrouter_timeout_s,
+            latencia_simulada_ms=settings.ia_latency_ms,
+        )
+
         publicacion = Publicacion(
             idea_id=idea.id,
-            red_social="instagram",
-            contenido_generado=_generar_texto(idea.contenido, tono, "instagram"),
+            red_social=red_social,
+            contenido_generado=generado.texto,
             tono=tono,
             estado="generada",
-            modelo_ia="atlas-sim-1",
+            modelo_ia=generado.modelo,
         )
         db.add(publicacion)
         idea.estado = "publicada"
@@ -79,13 +72,24 @@ def procesar_publicacion(job_id: str) -> None:
         job = db.get(Job, job_id)
         if job is not None:
             job.estado = "error"
-            job.error = str(exc)[:255]
+            # ErrorIA ya trae un mensaje para el usuario; cualquier otra
+            # excepción es un fallo interno y no debe filtrar detalles.
+            job.error = (str(exc) if isinstance(exc, ia.ErrorIA) else "Error interno al generar la publicación.")[:255]
+            # La idea quedó en "procesando" al encolar. Si se dejara así, la app
+            # la mostraría procesándose para siempre: vuelve a "publicada" si ya
+            # tenía publicaciones anteriores y a "borrador" si esta era la primera.
+            idea = db.get(Idea, job.idea_id)
+            if idea is not None and idea.estado == "procesando":
+                previas = db.scalar(
+                    select(func.count()).select_from(Publicacion).where(Publicacion.idea_id == idea.id)
+                )
+                idea.estado = "publicada" if previas else "borrador"
             db.commit()
     finally:
         db.close()
 
 
 @celery_app.task(name="atlas.generar_publicacion")
-def generar_publicacion(job_id: str) -> str:
-    procesar_publicacion(job_id)
+def generar_publicacion(job_id: str, red_social: str = "instagram") -> str:
+    procesar_publicacion(job_id, red_social)
     return job_id

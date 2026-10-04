@@ -1,7 +1,8 @@
 """Rutas de ideas: CRUD completo y demostración de la consulta N+1.
 
 CRUD (todo exige token; una idea solo la ve y la toca su dueño):
-  GET    /ideas        -> listado LIGERO      (list[IdeaOut], sin `contenido`)
+  GET    /ideas        -> listado LIGERO y PAGINADO (list[IdeaOut], sin `contenido`)
+                          ?limit=&offset=&q=&estado=  · total en `X-Total-Count`
   POST   /ideas        -> crear               (IdeaDetalleOut, 201)
   GET    /ideas/{id}   -> detalle COMPLETO    (IdeaDetalleOut)
   PATCH  /ideas/{id}   -> edición parcial     (IdeaDetalleOut)
@@ -23,8 +24,8 @@ Optimizaciones que se defienden en este módulo:
 3) Caché-aside: las TRES escrituras (POST, PATCH, DELETE) invalidan la clave del
    dashboard, porque ese reporte cuenta ideas y quedaría rancio si no se borra.
 """
-from fastapi import APIRouter, Depends, HTTPException, Response, status
-from sqlalchemy import delete, select
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import selectinload
 
 from ..cache import cache_invalidate, dashboard_key
@@ -105,11 +106,38 @@ def _buscar_idea(db, idea_id: int, usuario_id: int, con_relaciones: bool = True)
 def listar_ideas(
     response: Response,
     optimized: bool = True,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    q: str | None = Query(None, max_length=100),
+    estado: str | None = Query(None, pattern="^(borrador|procesando|publicada)$"),
     user: Principal = Depends(get_current_user),
     db=Depends(get_db),
 ):
+    # PAGINACIÓN + FILTROS (Semana 15). Un creador acumula cientos de ideas: el
+    # teléfono pide de 20 en 20 y solo baja la siguiente página al llegar al final.
+    filtros = [Idea.usuario_id == user.id]
+    if q and q.strip():
+        # Se escapan los comodines de LIKE: buscar "100%" no debe significar
+        # "100 seguido de cualquier cosa".
+        literal = q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        patron = f"%{literal}%"
+        filtros.append(
+            or_(Idea.titulo.ilike(patron, escape="\\"), Idea.contenido.ilike(patron, escape="\\"))
+        )
+    if estado:
+        filtros.append(Idea.estado == estado)
+
+    # El total viaja en la MISMA consulta con una función de ventana
+    # (COUNT(*) OVER ()), que se evalúa antes del LIMIT: así la paginación no
+    # añade un viaje extra a la base y el listado optimizado sigue en 3 consultas.
     consulta = (
-        select(Idea).where(Idea.usuario_id == user.id).order_by(Idea.creado_en.desc())
+        select(Idea, func.count().over().label("total"))
+        .where(*filtros)
+        # El id desempata ideas creadas en el mismo instante (la semilla las
+        # inserta en bloque): sin él, una fila podría repetirse entre páginas.
+        .order_by(Idea.creado_en.desc(), Idea.id.desc())
+        .limit(limit)
+        .offset(offset)
     )
     if optimized:
         # EAGER LOADING: precarga etiquetas y publicaciones en 2 consultas extra
@@ -118,8 +146,16 @@ def listar_ideas(
             selectinload(Idea.etiquetas), selectinload(Idea.publicaciones)
         )
 
-    ideas = db.execute(consulta).scalars().all()
-    salida = [_a_salida(i) for i in ideas]
+    filas = db.execute(consulta).all()
+    salida = [_a_salida(fila[0]) for fila in filas]
+    if filas:
+        total = filas[0].total
+    elif offset:
+        # Página más allá del final: no hay filas que lleven el total, se cuenta aparte.
+        total = db.scalar(select(func.count(Idea.id)).where(*filtros))
+    else:
+        total = 0
+    response.headers["X-Total-Count"] = str(total)
 
     response.headers["X-Query-Count"] = str(db.info.get("query_count", 0))
     response.headers["X-Optimized"] = str(optimized).lower()

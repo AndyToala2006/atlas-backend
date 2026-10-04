@@ -33,8 +33,18 @@ class Settings(BaseSettings):
     # simular nada). Se puede subir solo si se quisiera exagerar el efecto.
     report_latency_ms: int = 0
 
-    # Latencia simulada de la generación con IA (ms) en el worker asíncrono.
+    # Latencia simulada de la generación con IA (ms). Solo se aplica cuando NO
+    # hay API key y se usa el generador de respaldo (ver app/ia.py).
     ia_latency_ms: int = 3000
+
+    # Generación con IA real a través de OpenRouter (API compatible con OpenAI).
+    # Vacía = se usa el generador simulado. La key vive SOLO aquí, en el
+    # servidor: la app móvil nunca la recibe.
+    openrouter_api_key: str | None = None
+    # Cualquier modelo del catálogo de https://openrouter.ai/models. Los que
+    # terminan en ":free" no consumen saldo (con límite diario de peticiones).
+    openrouter_model: str = "anthropic/claude-haiku-4.5"
+    openrouter_timeout_s: int = 60
 
 
 settings = Settings()
